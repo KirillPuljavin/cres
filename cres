@@ -8,6 +8,16 @@ set -u
 LIMIT="${CRES_LIMIT:-20}"
 [[ "$LIMIT" =~ ^[0-9]+$ ]] && [ "$LIMIT" -gt 0 ] || LIMIT=20
 
+# Platform shims. Linux ships GNU coreutils, macOS ships BSD. `stat` and `date`
+# flags diverge; wrap them once and forget about it downstream.
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  file_mtime()    { stat -f %m "$1"; }
+  epoch_to_date() { date -r "$1" +%Y-%m-%d; }
+else
+  file_mtime()    { stat -c %Y "$1"; }
+  epoch_to_date() { date -d "@$1" +%Y-%m-%d; }
+fi
+
 # claude-code sanitizes CWD for the projects dir: every "/" becomes "-"
 project_slug=$(echo "$PWD" | sed 's|/|-|g')
 project_dir="$HOME/.claude/projects/$project_slug"
@@ -21,17 +31,23 @@ fi
 # Interactive sessions only. Headless `claude -p` runs open with `ai-title`
 # on line 1; TTY sessions open with `permission-mode` or `file-history-snapshot`.
 # Structural, 100% reliable, baked into CC CLI internals.
-mapfile -t files < <(
-  find "$project_dir" -maxdepth 1 -name "*.jsonl" -printf "%T@\t%p\n" 2>/dev/null \
+# Plain glob + file_mtime is portable where `find -printf` (GNU-only) isn't.
+files=()
+while IFS= read -r f; do
+  [ -n "$f" ] && files+=("$f")
+done < <(
+  for f in "$project_dir"/*.jsonl; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\n' "$(file_mtime "$f")" "$f"
+  done \
     | sort -rn \
     | while IFS=$'\t' read -r t f; do
         ft=$(head -n1 "$f" | jq -r '.type' 2>/dev/null)
         case "$ft" in
-          permission-mode|file-history-snapshot) printf '%s\t%s\n' "$t" "$f" ;;
+          permission-mode|file-history-snapshot) printf '%s\n' "$f" ;;
         esac
       done \
-    | head -"$LIMIT" \
-    | cut -f2
+    | head -"$LIMIT"
 )
 
 if [ ${#files[@]} -eq 0 ]; then
@@ -43,7 +59,7 @@ fi
 rows=()
 for f in "${files[@]}"; do
   id=$(basename "$f" .jsonl)
-  mtime_epoch=$(stat -c %Y "$f")
+  mtime_epoch=$(file_mtime "$f")
   now=$(date +%s)
   delta=$(( now - mtime_epoch ))
 
@@ -51,7 +67,7 @@ for f in "${files[@]}"; do
   elif [ $delta -lt 3600 ];   then rel="$((delta/60))m ago"
   elif [ $delta -lt 86400 ];  then rel="$((delta/3600))h ago"
   elif [ $delta -lt 604800 ]; then rel="$((delta/86400))d ago"
-  else                              rel=$(date -d "@$mtime_epoch" +%Y-%m-%d)
+  else                              rel=$(epoch_to_date "$mtime_epoch")
   fi
 
   # Try ai-title, then custom-title, then first user message, else "(untitled)"

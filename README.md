@@ -1,6 +1,6 @@
 # cres
 
-Claude RESume. Drop-in replacement for the broken `/resume` picker in Claude Code. Reads raw JSONL session history, runs `claude -r <id>` for you. About 60 lines of bash.
+Claude RESume. Drop-in replacement for the broken `/resume` picker in Claude Code. Reads raw JSONL session history, runs `claude -r <id>` for you. About 60 lines of bash. Works on Linux and macOS.
 
 ## Install
 
