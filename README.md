@@ -8,7 +8,13 @@ Claude RESume. Drop-in replacement for the broken `/resume` picker in Claude Cod
 curl -fsSL https://raw.githubusercontent.com/KirillPuljavin/cres/main/install.sh | bash
 ```
 
-That's it. The installer detects your package manager (brew, apt, dnf, pacman, zypper, apk) and pulls in `jq` and `fzf` if missing.
+Detects your package manager (apt, dnf, pacman, zypper, apk, brew) and pulls in `jq` and `fzf` if missing. Works on Linux and macOS.
+
+Or via Homebrew:
+
+```bash
+brew install kirillpuljavin/cres/cres
+```
 
 <details>
 <summary>Manual install</summary>
