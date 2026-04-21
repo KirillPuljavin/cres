@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# cres — Claude RESume. Raw-JSONL replacement for the broken /resume picker.
+# https://github.com/KirillPuljavin/cres
+
+set -u
+
+# Row count. Override via CRES_LIMIT env var. Fall back silently on garbage.
+LIMIT="${CRES_LIMIT:-20}"
+[[ "$LIMIT" =~ ^[0-9]+$ ]] && [ "$LIMIT" -gt 0 ] || LIMIT=20
+
+# claude-code sanitizes CWD for the projects dir: every "/" becomes "-"
+project_slug=$(echo "$PWD" | sed 's|/|-|g')
+project_dir="$HOME/.claude/projects/$project_slug"
+
+if [ ! -d "$project_dir" ]; then
+  echo "cres: no session history for $PWD" >&2
+  echo "      expected: $project_dir" >&2
+  exit 1
+fi
+
+# Interactive sessions only. Headless `claude -p` runs open with `ai-title`
+# on line 1; TTY sessions open with `permission-mode` or `file-history-snapshot`.
+# Structural, 100% reliable, baked into CC CLI internals.
+mapfile -t files < <(
+  find "$project_dir" -maxdepth 1 -name "*.jsonl" -printf "%T@\t%p\n" 2>/dev/null \
+    | sort -rn \
+    | while IFS=$'\t' read -r t f; do
+        ft=$(head -n1 "$f" | jq -r '.type' 2>/dev/null)
+        case "$ft" in
+          permission-mode|file-history-snapshot) printf '%s\t%s\n' "$t" "$f" ;;
+        esac
+      done \
+    | head -"$LIMIT" \
+    | cut -f2
+)
+
+if [ ${#files[@]} -eq 0 ]; then
+  echo "cres: no sessions found in $project_dir" >&2
+  exit 1
+fi
+
+# Build picker rows: "relative-time │ title │ session-id"
+rows=()
+for f in "${files[@]}"; do
+  id=$(basename "$f" .jsonl)
+  mtime_epoch=$(stat -c %Y "$f")
+  now=$(date +%s)
+  delta=$(( now - mtime_epoch ))
+
+  if   [ $delta -lt 60 ];     then rel="just now"
+  elif [ $delta -lt 3600 ];   then rel="$((delta/60))m ago"
+  elif [ $delta -lt 86400 ];  then rel="$((delta/3600))h ago"
+  elif [ $delta -lt 604800 ]; then rel="$((delta/86400))d ago"
+  else                              rel=$(date -d "@$mtime_epoch" +%Y-%m-%d)
+  fi
+
+  # Try ai-title, then custom-title, then first user message, else "(untitled)"
+  title=$(jq -r 'select(.type == "ai-title") | .aiTitle' "$f" 2>/dev/null | head -1)
+  [ -z "$title" ] && title=$(jq -r 'select(.type == "custom-title") | .customTitle' "$f" 2>/dev/null | head -1)
+  [ -z "$title" ] && title=$(jq -r 'select(.type == "user") | .message.content // .content // empty' "$f" 2>/dev/null | head -1 | cut -c1-60)
+  [ -z "$title" ] && title="(untitled)"
+
+  rows+=("$(printf '%-10s │ %-60s │ %s' "$rel" "$title" "$id")")
+done
+
+selected=$(
+  printf '%s\n' "${rows[@]}" \
+    | fzf --height=40% --reverse --prompt='resume ▸ ' \
+          --header='↑↓ select · enter resume · esc cancel' \
+          --no-sort --ansi
+) || exit 0
+
+# Session id is the last whitespace-free token
+session_id=$(echo "$selected" | awk -F' │ ' '{print $NF}' | tr -d '[:space:]')
+
+exec claude -r "$session_id"
